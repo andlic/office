@@ -1,0 +1,8 @@
+# reassemble.sh 合并分卷后生成的完整 tarball（不入库，体积大）
+# 分卷本体 *.part-NNN 是入库的，见 REASSEMBLE.md
+core-bin.tar.gz
+core-fonts.tar.gz
+dictionaries.tar.gz
+server.tar.gz
+templates.tar.gz
+webapps-deploy.tar.gz

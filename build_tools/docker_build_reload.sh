@@ -11,6 +11,7 @@
 #   sudo ./docker_build_reload.sh                    # 默认配置
 #   sudo ./docker_build_reload.sh --skip-build       # 跳过本地编译
 #   sudo ./docker_build_reload.sh --skip-tar          # 跳过 tar 打包
+#   sudo ./docker_build_reload.sh --from-ctx          # 复用 .docker-ctx/ 已有产物（新机器免编译）
 #   sudo ./docker_build_reload.sh --tag myname:v1    # 自定义 tag
 #
 # 持久化数据：
@@ -35,7 +36,7 @@ BUILD_ARGS=()
 
 for arg in "$@"; do
     case "$arg" in
-        --skip-build|--skip-tar|--help|-h)
+        --skip-build|--skip-tar|--from-ctx|--help|-h)
             BUILD_ARGS+=("$arg") ;;
         --tag=*)
             IMAGE_TAG="${arg#--tag=}"

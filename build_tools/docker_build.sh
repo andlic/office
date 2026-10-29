@@ -11,8 +11,15 @@
 #   ./docker_build.sh                    # 全量构建 + 打包镜像
 #   ./docker_build.sh --skip-build       # 跳过本地编译，只打包
 #   ./docker_build.sh --skip-tar          # 跳过 tar 步骤（如果产物没变）
+#   ./docker_build.sh --from-ctx          # 复用 .docker-ctx/ 里已有的 tar（不编译不打包）
 #   ./docker_build.sh --tag myname:1.0   # 指定镜像 tag
 #   TAG=foo ./docker_build.sh            # 同上
+#
+# --from-ctx 用于「新服务器只 clone 代码」的免编译路径：仓库里已经带了编译好的
+# 产物（.docker-ctx/*.tar.gz，部分以 .part-NNN 分卷存放）。先跑
+#   cd .docker-ctx && sh reassemble.sh     # 合并分卷
+# 再跑本脚本 --from-ctx：既不清理 .docker-ctx，也不重新打包，直接用现成产物打镜像。
+# 注意本脚本默认路径会 rm -rf .docker-ctx，所以复用时必须带 --from-ctx。
 #
 # 镜像 tag 默认：onlyoffice/documentserver:local
 
@@ -25,15 +32,24 @@ DS_DIR="${DS_ROOT:-$PROJECT_ROOT}"
 TAG="${TAG:-onlyoffice/documentserver:local}"
 SKIP_BUILD=0
 SKIP_TAR=0
+FROM_CTX=0
 
-for arg in "$@"; do
-  case "$arg" in
-    --skip-build) SKIP_BUILD=1 ;;
-    --skip-tar)   SKIP_TAR=1 ;;
-    --tag=*)      TAG="${arg#--tag=}" ;;
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --skip-build) SKIP_BUILD=1; shift ;;
+    --skip-tar)   SKIP_TAR=1; shift ;;
+    --from-ctx)   FROM_CTX=1; SKIP_BUILD=1; SKIP_TAR=1; shift ;;
+    --tag=*)      TAG="${1#--tag=}"; shift ;;
+    --tag)
+      if [[ $# -lt 2 ]]; then echo "--tag 需要一个值" >&2; exit 1; fi
+      TAG="$2"; shift 2 ;;
     --help|-h)
-      sed -n '2,12p' "$0"
+      sed -n '2,24p' "$0"
       exit 0
+      ;;
+    *)
+      echo "未知参数：$1（用 --help 看用法）" >&2
+      exit 1
       ;;
   esac
 done
@@ -47,7 +63,11 @@ fi
 
 # 准备 build context：只含 tar + Dockerfile，避免 docker 把 12GB 项目根送给 daemon
 CTX_DIR="$HERE/.docker-ctx"
-rm -rf "$CTX_DIR"
+if [[ "$FROM_CTX" -eq 1 ]]; then
+  echo "=== 复用已有 build context（不清理、不重新打包）: $CTX_DIR ==="
+else
+  rm -rf "$CTX_DIR"
+fi
 mkdir -p "$CTX_DIR"
 cp "$HERE/Dockerfile.custom" "$CTX_DIR/Dockerfile"
 # 这两个文件 Dockerfile.custom 第 17/18 步要用到
@@ -84,31 +104,55 @@ fi
 
 # core bin/lib 单独 COPY（文件少），但 tar 时把 bin/linux_64/* 和 lib/linux_64/*
 # 直接放在 tar 根，免去目录嵌套
-if [[ -d "$DS_DIR/core/build/bin/linux_64" ]]; then
-  echo "  • core-bin.tar.gz (core 二进制，平铺在根)"
-  tar -czf "$CTX_DIR/core-bin.tar.gz" -C "$DS_DIR/core/build/bin/linux_64" .
-fi
-if [[ -d "$DS_DIR/core/build/lib/linux_64" ]]; then
-  echo "  • core-lib.tar.gz (core 库，平铺在根)"
-  tar -czf "$CTX_DIR/core-lib.tar.gz" -C "$DS_DIR/core/build/lib/linux_64" .
-fi
+# --from-ctx 时全部跳过：直接用 .docker-ctx/ 里已有的 tar（仓库已带）
+if [[ "$FROM_CTX" -eq 0 ]]; then
+  if [[ -d "$DS_DIR/core/build/bin/linux_64" ]]; then
+    echo "  • core-bin.tar.gz (core 二进制，平铺在根)"
+    tar -czf "$CTX_DIR/core-bin.tar.gz" -C "$DS_DIR/core/build/bin/linux_64" .
+  fi
+  if [[ -d "$DS_DIR/core/build/lib/linux_64" ]]; then
+    echo "  • core-lib.tar.gz (core 库，平铺在根)"
+    tar -czf "$CTX_DIR/core-lib.tar.gz" -C "$DS_DIR/core/build/lib/linux_64" .
+  fi
 
-# dictionaries, schema, fonts, templates (文件少，可以 COPY)
-# 由于这些目录的源在 DocumentServer 下（已是 symlink），直接 tar 进 context
-[[ -d "$DS_DIR/dictionaries" ]] && tar -czf "$CTX_DIR/dictionaries.tar.gz" -C "$DS_DIR" dictionaries
-[[ -d "$DS_DIR/server/schema" ]] && tar -czf "$CTX_DIR/schema.tar.gz" -C "$DS_DIR/server" schema
-# core-fonts 是 git submodule；自定义字体放顶层 custom-fonts/，用 tar 变换并入 core-fonts/custom/
-if [[ -d "$DS_DIR/custom-fonts" ]]; then
-  [[ -d "$DS_DIR/core-fonts" ]] && tar -czf "$CTX_DIR/core-fonts.tar.gz" -C "$DS_DIR" \
-    --transform='s,^custom-fonts,core-fonts/custom,' core-fonts custom-fonts
-else
-  [[ -d "$DS_DIR/core-fonts" ]] && tar -czf "$CTX_DIR/core-fonts.tar.gz" -C "$DS_DIR" core-fonts
+  # dictionaries, schema, fonts, templates (文件少，可以 COPY)
+  # 由于这些目录的源在 DocumentServer 下（已是 symlink），直接 tar 进 context
+  [[ -d "$DS_DIR/dictionaries" ]] && tar -czf "$CTX_DIR/dictionaries.tar.gz" -C "$DS_DIR" dictionaries
+  [[ -d "$DS_DIR/server/schema" ]] && tar -czf "$CTX_DIR/schema.tar.gz" -C "$DS_DIR/server" schema
+  # core-fonts 是 git submodule；自定义字体放顶层 custom-fonts/，用 tar 变换并入 core-fonts/custom/
+  if [[ -d "$DS_DIR/custom-fonts" ]]; then
+    [[ -d "$DS_DIR/core-fonts" ]] && tar -czf "$CTX_DIR/core-fonts.tar.gz" -C "$DS_DIR" \
+      --transform='s,^custom-fonts,core-fonts/custom,' core-fonts custom-fonts
+  else
+    [[ -d "$DS_DIR/core-fonts" ]] && tar -czf "$CTX_DIR/core-fonts.tar.gz" -C "$DS_DIR" core-fonts
+  fi
+  [[ -d "$DS_DIR/document-templates" ]] && tar -czf "$CTX_DIR/templates.tar.gz" -C "$DS_DIR" document-templates
 fi
-[[ -d "$DS_DIR/document-templates" ]] && tar -czf "$CTX_DIR/templates.tar.gz" -C "$DS_DIR" document-templates
 
 echo
 echo "  Build context 内容："
 ls -lh "$CTX_DIR/"
+
+if [[ "$FROM_CTX" -eq 1 ]]; then
+  echo
+  echo "=== 预检：Dockerfile 需要的 tar 是否齐全 ==="
+  missing=0
+  for t in server.tar.gz core-bin.tar.gz core-lib.tar.gz sdkjs-deploy.tar.gz \
+           webapps-deploy.tar.gz dictionaries.tar.gz schema.tar.gz \
+           core-fonts.tar.gz templates.tar.gz; do
+    if [[ ! -f "$CTX_DIR/$t" ]]; then
+      echo "  ✗ 缺少 $t"
+      missing=1
+    fi
+  done
+  if [[ "$missing" -eq 1 ]]; then
+    echo
+    echo "分卷还没合并？先执行："
+    echo "  cd $CTX_DIR && sh reassemble.sh"
+    exit 1
+  fi
+  echo "  ✓ 全部就绪"
+fi
 
 echo
 echo "=== 3. 打包 Docker 镜像 ==="

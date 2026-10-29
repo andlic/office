@@ -2,6 +2,46 @@
 
 全部命令在 `build_tools/` 下执行（除注明路径）。首次搭建按 A 顺序；日常改动见 B。
 
+## A0. 新服务器部署（免编译路径，推荐）
+
+仓库里已经带了**编译好的产物**（`build_tools/.docker-ctx/*.tar.gz`），所以新机器
+**不需要编译**，只需 clone → 合并分卷 → 打镜像 → 启动。全程约 15 分钟。
+
+前提：机器已装 Docker，且能访问 Docker Hub（要拉基础镜像 `onlyoffice/documentserver:9.4.0`）。
+
+```bash
+git clone git@github.com:andlic/office.git          # 或 https://github.com/andlic/office.git
+cd office/build_tools/.docker-ctx
+
+# ① 合并分卷（GitHub 单文件 100MB 限制导致 tar 被切成 .part-NNN，共 6 个 tar）
+sh reassemble.sh
+
+cd ..
+# ② 用现成产物打镜像（--from-ctx：不编译、不重新打包、不清空 .docker-ctx）
+./docker_build.sh --from-ctx
+```
+
+`--from-ctx` 会先做预检：缺哪个 tar 就报哪个，并提示先跑 `reassemble.sh`。
+不加这个参数直接跑 `./docker_build.sh` 会 `rm -rf .docker-ctx`，把仓库带来的
+预编译产物删掉，然后要求你本地编译 30–60 分钟——**新机器上别这么干**。
+
+```bash
+# ③ 启动容器（挂命名卷持久化 example 文档 / 版本历史 / DS 缓存）
+sudo docker run -d --name onlyoffice-documentserver \
+    -p 80:80 -p 443:443 \
+    -v onlyoffice-data:/var/lib/onlyoffice \
+    onlyoffice/documentserver:local
+
+# ④ 验证
+curl http://localhost/healthcheck      # 期望 true
+```
+
+磁盘占用参考：仓库工作区约 7GB；合并分卷再占约 1.5GB；镜像约 4.4GB。建议预留 20GB。
+
+> 免编译路径的边界：它复用的是**当前这份产物**。改了 C++/JS 源码后必须回到
+> 「B. 日常修改」在有编译环境的机器上重编产物，再把新产物同步过来。
+> 源码级重编见下方 A 节。
+
 ## B. 日常修改：改了什么 → 跑什么
 
 **两步**：① 重编改动产物 → ② 重打镜像 + 重启容器。
