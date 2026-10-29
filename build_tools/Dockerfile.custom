@@ -36,11 +36,26 @@ RUN set -eux; \
 
 # 1. server 整套 node_modules（重置整个 server 目录）
 #    注意：server.tar.gz 内含 server/ 前缀，提取时 --strip-components=1
+#    基础镜像的 server/ 下有 3 个我们仓库里没有的东西：tools/（pluginsmanager 等）、
+#    welcome/、info/（两个静态页，被 production-linux.json 的 /welcome、/info 路由引用）。
+#    整目录 rm -rf 会把它们一起删掉，所以先留一份，替换后再放回去。
 COPY server.tar.gz /tmp/server.tar.gz
-RUN rm -rf ${DS_DOC_ROOT}/server && \
-    mkdir -p ${DS_DOC_ROOT}/server && \
-    tar -xzf /tmp/server.tar.gz -C ${DS_DOC_ROOT}/server/ --strip-components=1 && \
-    rm -f /tmp/server.tar.gz
+RUN set -eux; \
+    mkdir -p /tmp/ds-keep; \
+    for d in tools welcome info; do \
+      if [ -e "${DS_DOC_ROOT}/server/$d" ]; then cp -a "${DS_DOC_ROOT}/server/$d" /tmp/ds-keep/; fi; \
+    done; \
+    rm -rf ${DS_DOC_ROOT}/server; \
+    mkdir -p ${DS_DOC_ROOT}/server; \
+    tar -xzf /tmp/server.tar.gz -C ${DS_DOC_ROOT}/server/ --strip-components=1; \
+    for d in tools welcome info; do \
+      if [ -e "/tmp/ds-keep/$d" ]; then \
+        rm -rf "${DS_DOC_ROOT}/server/$d"; \
+        cp -a "/tmp/ds-keep/$d" "${DS_DOC_ROOT}/server/$d"; \
+      fi; \
+    done; \
+    chmod -R u+w ${DS_DOC_ROOT}/server/tools 2>/dev/null || true; \
+    rm -rf /tmp/ds-keep /tmp/server.tar.gz
 
 # 1c. 包装 converter/docservice/gc/prepare4shutdown，让 supervisor 用 node 跑源码
 #     官方镜像里这些是 pkg 打包的单一二进制（141MB）。我们没装 pkg，所以
