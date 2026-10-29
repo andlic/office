@@ -1,0 +1,16 @@
+QT.waylandcompositor_private.VERSION = 5.9.9
+QT.waylandcompositor_private.name = QtWaylandCompositor
+QT.waylandcompositor_private.module =
+QT.waylandcompositor_private.libs = $$QT_MODULE_LIB_BASE
+QT.waylandcompositor_private.includes = $$QT_MODULE_INCLUDE_BASE/QtWaylandCompositor/5.9.9 $$QT_MODULE_INCLUDE_BASE/QtWaylandCompositor/5.9.9/QtWaylandCompositor
+QT.waylandcompositor_private.frameworks =
+QT.waylandcompositor_private.depends = gui_private core_private qml_private quick_private waylandcompositor
+QT.waylandcompositor_private.uses =
+QT.waylandcompositor_private.module_config = v2 internal_module
+QT.waylandcompositor_private.enabled_features = wayland-server drm-egl-server wayland-datadevice wayland-egl xcomposite-egl xcomposite-glx
+QT.waylandcompositor_private.disabled_features = libhybris-egl-server wayland-brcm
+QMAKE_LIBS_WAYLAND-SERVER = -lwayland-server
+QMAKE_LIBS_WAYLAND-EGL = -lwayland-egl -lwayland-client
+QMAKE_LIBS_XCOMPOSITE = -lXcomposite
+QMAKE_LIBS_GLX = -lX11 -lGL
+QMAKE_INCDIR_GLX = /usr/include/libdrm

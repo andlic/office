@@ -1,0 +1,13 @@
+prefix=/build
+exec_prefix=${prefix}
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+
+Name: Qt5 WaylandCompositor
+Description: Qt WaylandCompositor module
+Version: 5.9.9
+Libs: -L${libdir} -lQt5WaylandCompositor 
+Cflags: -I${includedir}/QtWaylandCompositor -I${includedir}
+Requires: Qt5Core Qt5Gui Qt5Quick Qt5Qml
+

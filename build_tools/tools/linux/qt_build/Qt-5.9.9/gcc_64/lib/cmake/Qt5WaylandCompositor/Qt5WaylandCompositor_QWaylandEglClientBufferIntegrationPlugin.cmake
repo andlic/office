@@ -1,0 +1,6 @@
+
+add_library(Qt5::QWaylandEglClientBufferIntegrationPlugin MODULE IMPORTED)
+
+_populate_WaylandCompositor_plugin_properties(QWaylandEglClientBufferIntegrationPlugin RELEASE "wayland-graphics-integration-server/libwayland-egl.so")
+
+list(APPEND Qt5WaylandCompositor_PLUGINS Qt5::QWaylandEglClientBufferIntegrationPlugin)
