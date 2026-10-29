@@ -1,0 +1,39 @@
+{
+  "externalRequest": {
+    "action": {
+      "allow": true,
+      "blockPrivateIP": false,
+      "proxyUrl": "",
+      "proxyUser": {"username": "", "password": ""},
+      "proxyHeaders": {}
+    }
+  },
+  "FileConverter": {
+    "converter": {
+      "spawnOptions": {
+        "env": {
+          "LD_PRELOAD": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6"
+        }
+      }
+    }
+  },
+  "services": {
+    "CoAuthoring": {
+      "token": {
+        "enable": {
+          "browser": false,
+          "request": {
+            "inbox": false,
+            "outbox": false
+          }
+        }
+      },
+      "secret": {
+        "inbox":   {"string": "mysecret123"},
+        "outbox":  {"string": "mysecret123"},
+        "session": {"string": "mysecret123"},
+        "browser": {"string": "mysecret123"}
+      }
+    }
+  }
+}
