@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>eCTD 文件选择器（宿主 UI）</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+    :root {
+        --bar: #2b3a4a;
+        --line: #dde3ea;
+        --accent: #2f6fed;
+        --muted: #6b7c8f;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+        font: 13px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+        color: #25313f;
+        display: flex;
+        flex-direction: column;
+        background: #fff;
+    }
+    header {
+        background: var(--bar);
+        color: #fff;
+        padding: 10px 14px;
+        flex: 0 0 auto;
+    }
+    header h1 { margin: 0; font-size: 14px; font-weight: 600; }
+    header .path { color: #9fb2c6; font-size: 12px; margin-top: 2px; word-break: break-all; }
+    .toolbar {
+        padding: 8px 14px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex: 0 0 auto;
+    }
+    .toolbar input {
+        flex: 1;
+        min-width: 0;
+        padding: 5px 9px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        font: inherit;
+        outline: none;
+    }
+    .toolbar input:focus { border-color: var(--accent); }
+    #error {
+        margin: 8px 14px 0;
+        padding: 6px 10px;
+        border: 1px solid #f0b8b8;
+        background: #fff3f3;
+        color: #a12626;
+        border-radius: 4px;
+        display: none;
+        flex: 0 0 auto;
+    }
+    main {
+        flex: 1 1 auto;
+        overflow: auto;
+        padding: 8px 14px 12px;
+    }
+    ul.tree { list-style: none; margin: 0; padding-left: 18px; }
+    main > ul.tree { padding-left: 0; }
+    li { margin: 1px 0; }
+    details > summary {
+        cursor: pointer;
+        padding: 3px 6px;
+        border-radius: 4px;
+        color: #3c4c5e;
+        font-weight: 600;
+        list-style: none;
+        user-select: none;
+    }
+    details > summary::-webkit-details-marker { display: none; }
+    details > summary:before {
+        content: "▸";
+        display: inline-block;
+        width: 14px;
+        color: var(--muted);
+        transition: transform .12s ease;
+    }
+    details[open] > summary:before { transform: rotate(90deg); }
+    details > summary:hover { background: #f2f5f9; }
+    .file {
+        display: block;
+        padding: 3px 8px 3px 20px;
+        border-radius: 4px;
+        cursor: pointer;
+        border: 1px solid transparent;
+    }
+    .file:hover { background: #f2f5f9; }
+    .file.selected {
+        background: #e8f0ff;
+        border-color: #b9cdfa;
+        color: #173f9e;
+    }
+    .file .ext { color: var(--muted); font-size: 11px; margin-left: 6px; }
+    .hidden { display: none !important; }
+    footer {
+        flex: 0 0 auto;
+        border-top: 1px solid var(--line);
+        padding: 10px 14px;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        background: #fafbfc;
+    }
+    #selected {
+        flex: 1;
+        color: var(--muted);
+        font-size: 12px;
+        word-break: break-all;
+        min-width: 0;
+    }
+    button {
+        padding: 6px 16px;
+        border-radius: 4px;
+        border: 1px solid var(--line);
+        background: #fff;
+        cursor: pointer;
+        font: inherit;
+    }
+    button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+    }
+    button:disabled { opacity: .45; cursor: default; }
+    .hint { color: var(--muted); padding: 24px 0; text-align: center; }
+</style>
+</head>
+<body>
+
+<header>
+    <h1>eCTD 文件选择器</h1>
+    <div class="path" id="current-path">等待编辑器初始化…</div>
+</header>
+
+<div class="toolbar">
+    <input id="filter" type="search" placeholder="按文件名筛选…" autocomplete="off">
+</div>
+<div id="error"></div>
+
+<main>
+    <div class="hint" id="hint">加载目录树…</div>
+    <ul class="tree hidden" id="tree"></ul>
+</main>
+
+<footer>
+    <span id="selected">未选择文件</span>
+    <button id="cancel" type="button">取消</button>
+    <button id="confirm" type="button" class="primary" disabled>选择此文件</button>
+</footer>
+
+<script>
+/*
+ * 宿主提供的 eCTD 选择器（iframe 插槽参考实现）
+ * ============================================================================
+ * 编辑器（DocumentServer 的 PDF 编辑器）把这个页面嵌入链接设置对话框，
+ * 通过 postMessage 传递上下文、接收选择结果。宿主可换成任意技术栈，
+ * 只要满足同样的消息契约即可。
+ *
+ * 编辑器 -> 宿主 iframe:
+ *   { type: 'ectd:init',    currentDocumentPath, lang }
+ *   { type: 'ectd:invalid', reason }
+ *
+ * 宿主 iframe -> 编辑器:
+ *   { type: 'ectd:ready' }                                   // 监听器就绪，编辑器会重发 init
+ *   { type: 'ectd:select', href: './m1/1.2/cover.pdf' }      // 推荐：宿主直接算好链接
+ *   { type: 'ectd:select', path: 'm1/1.2/cover.pdf' }        // 备选：编辑器用 currentDocumentPath 算相对路径
+ *   { type: 'ectd:select', href: '...', dest: {...} }        // PDF 目标：可选指定 /GoToR 目的地
+ *   { type: 'ectd:cancel' }
+ *   { type: 'ectd:error', message: '...' }
+ *
+ * 安全：回复消息的 targetOrigin 必须用 init 消息里的 event.origin（DS 域），
+ * 不要用 '*'。这里的 ready 消息不带数据，所以用 '*' 发送以完成首次握手。
+ *
+ * 数据源：本 demo 读取宿主的 ectd-tree.json（与内置树模式同一份数据）。
+ * 生产环境换成宿主自己的接口/数据即可。
+ * 树节点可带可选 dest（仅 PDF 目标），如
+ *   { name: 'cover.pdf', dest: { page: 2, type: 'Fit' } }
+ * 选中后原样放进 ectd:select，由编辑器校验并写入 /GoToR 的 /D。
+ */
+(function () {
+    'use strict';
+
+    var treeEl = document.getElementById('tree');
+    var hintEl = document.getElementById('hint');
+    var errorEl = document.getElementById('error');
+    var currentPathEl = document.getElementById('current-path');
+    var selectedEl = document.getElementById('selected');
+    var confirmBtn = document.getElementById('confirm');
+    var cancelBtn = document.getElementById('cancel');
+    var filterEl = document.getElementById('filter');
+
+    var editorOrigin = null;     // DS 域 origin，由 init 消息获得
+    var currentDocumentPath = '';
+    var selectedPath = '';
+    var selectedDest = null;     // 可选：树节点上的 dest（PDF 目标的 /GoToR 目的地）
+
+    // 与编辑器内 ECtDApi.getRelativePath 同款算法（纯函数）：
+    // 两边都是 "a/b/c.pdf" 形式，结果以 "./" 或 "../" 开头。
+    function getRelativePath(fromPath, toPath) {
+        var from = fromPath.split('/'); from.pop();
+        var to = toPath.split('/');
+        var i = 0;
+        while (i < from.length && i < to.length - 1 && from[i] === to[i]) ++i;
+        var parts = [];
+        for (var u = i; u < from.length; ++u) parts.push('..');
+        parts = parts.concat(to.slice(i));
+        var rel = parts.join('/');
+        return rel.indexOf('../') === 0 ? rel : './' + rel;
+    }
+
+    function post(type, payload) {
+        if (!editorOrigin) return;
+        var msg = Object.assign({ type: type }, payload || {});
+        window.parent.postMessage(msg, editorOrigin);
+    }
+
+    function showError(message) {
+        errorEl.textContent = message;
+        errorEl.style.display = message ? 'block' : 'none';
+    }
+
+    function clearSelection() {
+        selectedPath = '';
+        selectedDest = null;
+        selectedEl.textContent = '未选择文件';
+        confirmBtn.disabled = true;
+        Array.prototype.forEach.call(treeEl.querySelectorAll('.file.selected'), function (el) {
+            el.classList.remove('selected');
+        });
+    }
+
+    function selectFile(node, fullPath, dest) {
+        clearSelection();
+        selectedPath = fullPath;
+        selectedDest = dest || null;
+        node.classList.add('selected');
+        selectedEl.textContent = fullPath;
+        confirmBtn.disabled = false;
+    }
+
+    // ---------- 目录树渲染（文件夹 = children，文件 = 叶子） ----------
+    function renderTree(nodes, ul, prefix) {
+        nodes.forEach(function (node) {
+            var fullPath = prefix ? prefix + '/' + node.name : node.name;
+            var li = document.createElement('li');
+
+            if (node.children) {
+                var details = document.createElement('details');
+                details.open = true;
+                var summary = document.createElement('summary');
+                summary.textContent = node.name;
+                summary.dataset.name = node.name.toLowerCase();
+                details.appendChild(summary);
+                var sub = document.createElement('ul');
+                sub.className = 'tree';
+                renderTree(node.children, sub, fullPath);
+                details.appendChild(sub);
+                li.appendChild(details);
+            } else {
+                var file = document.createElement('span');
+                file.className = 'file';
+                file.dataset.name = node.name.toLowerCase();
+                file.dataset.path = fullPath;
+                file.textContent = node.name;
+                var dot = node.name.lastIndexOf('.');
+                if (dot > 0) {
+                    var ext = document.createElement('span');
+                    ext.className = 'ext';
+                    ext.textContent = node.name.slice(dot + 1).toUpperCase();
+                    file.appendChild(ext);
+                }
+                file.addEventListener('click', function () { selectFile(file, fullPath, node.dest); });
+                file.addEventListener('dblclick', function () {
+                    selectFile(file, fullPath, node.dest);
+                    confirmSelection();
+                });
+                li.appendChild(file);
+            }
+            ul.appendChild(li);
+        });
+    }
+
+    function applyFilter(query) {
+        var q = (query || '').trim().toLowerCase();
+        Array.prototype.forEach.call(treeEl.querySelectorAll('li'), function (li) {
+            li.classList.remove('hidden');
+        });
+        if (!q) return;
+
+        Array.prototype.forEach.call(treeEl.querySelectorAll('.file'), function (file) {
+            var hit = file.dataset.name.indexOf(q) >= 0;
+            file.classList.toggle('hidden', !hit);
+        });
+        // 隐藏没有命中文件的文件夹（自底向上；只统计不处于隐藏文件夹内的节点）
+        var folders = Array.prototype.slice.call(treeEl.querySelectorAll('details')).reverse();
+        folders.forEach(function (details) {
+            var hasFile = Array.prototype.some.call(
+                details.querySelectorAll('.file:not(.hidden)'),
+                function (file) { return !file.closest('details.hidden'); }
+            );
+            var hasFolder = Array.prototype.some.call(
+                details.querySelectorAll('details:not(.hidden)'),
+                function (sub) { return !sub.closest('details.hidden'); }
+            );
+            details.classList.toggle('hidden', !hasFile && !hasFolder);
+        });
+    }
+
+    // ---------- 消息契约 ----------
+    window.addEventListener('message', function (event) {
+        var data = event.data;
+        if (!data || typeof data !== 'object' || typeof data.type !== 'string') return;
+
+        if (data.type === 'ectd:init') {
+            editorOrigin = event.origin;
+            currentDocumentPath = data.currentDocumentPath || '';
+            currentPathEl.textContent = currentDocumentPath
+                ? '当前文档：' + currentDocumentPath
+                : '当前文档路径未提供（宿主应在 customization.ectd.currentDocumentPath 中下发）';
+            return;
+        }
+
+        if (data.type === 'ectd:invalid') {
+            showError('编辑器拒绝了该链接：' + (data.reason || 'unknown reason'));
+        }
+    });
+
+    function confirmSelection() {
+        if (!selectedPath) return;
+        showError('');
+        if (!editorOrigin) {
+            showError('尚未与编辑器建立消息通道，请从编辑器内打开此页面。');
+            return;
+        }
+        // 可选：节点上的 dest 透传给编辑器（仅 PDF 目标有效，编辑器会校验）
+        var destPart = selectedDest ? {dest: selectedDest} : {};
+        if (currentDocumentPath) {
+            post('ectd:select', Object.assign({
+                href: getRelativePath(currentDocumentPath, selectedPath),
+                path: selectedPath,
+                name: selectedPath.split('/').pop()
+            }, destPart));
+        } else {
+            // 没有当前文档路径时交给编辑器算（编辑器会校验并可能回 ectd:invalid）
+            post('ectd:select', Object.assign({
+                path: selectedPath,
+                name: selectedPath.split('/').pop()
+            }, destPart));
+        }
+    }
+
+    confirmBtn.addEventListener('click', confirmSelection);
+    cancelBtn.addEventListener('click', function () { post('ectd:cancel'); });
+    filterEl.addEventListener('input', function () { applyFilter(filterEl.value); });
+
+    // ---------- 加载宿主的目录树数据 ----------
+    fetch('/ectd-tree.json')
+        .then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+        })
+        .then(function (tree) {
+            hintEl.classList.add('hidden');
+            treeEl.classList.remove('hidden');
+            renderTree(tree, treeEl, '');
+        })
+        .catch(function (e) {
+            hintEl.textContent = '目录树加载失败：' + e.message;
+            showError('目录树加载失败：' + e.message);
+        });
+
+    // 监听器已就绪，通知编辑器（编辑器收到后会重发 init，避免加载时序竞争）
+    window.parent.postMessage({ type: 'ectd:ready' }, '*');
+})();
+</script>
+</body>
+</html>

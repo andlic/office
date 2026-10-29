@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WebClient Demo — 编辑器嵌入页</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+    html, body { margin: 0; height: 100%; }
+    #bar { height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 14px;
+           background: #2b3a4a; color: #fff; font: 13px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+    #bar a { color: #9fc3f5; text-decoration: none; }
+    #bar .path { color: #9fb2c6; font-size: 12px; margin-left: auto; }
+    #status { color: #ffd479; font-size: 12px; }
+    #placeholder { height: calc(100% - 40px); }
+</style>
+</head>
+<body>
+
+<div id="bar">
+    <a href="index.html">← 返回列表</a>
+    <span id="title"></span>
+    <span id="status">加载中…</span>
+    <span class="path" id="ectd-path"></span>
+</div>
+<div id="placeholder"></div>
+
+<script src="js/config.js"></script>
+<script src="js/docs.js"></script>
+<script src="js/ectd-service.js"></script>
+<script src="js/jwt-dev.js"></script>
+<script>
+(function () {
+    'use strict';
+    var cfg = WebClient.config;
+    var docEditor = null;   // DocsAPI 实例（版本历史事件回调里要用）
+
+    // ---------- 1. 从宿主侧数据里定位要打开的文档 ----------
+    var fileId = new URLSearchParams(location.search).get('file');
+    // ?mode=view 以只读方式打开（验证编辑/查看两种模式行为一致）。
+    var viewMode = new URLSearchParams(location.search).get('mode') === 'view';
+    var doc = null;
+    for (var i = 0; i < WebClient.docs.length; i++) {
+        if (WebClient.docs[i].id === fileId) { doc = WebClient.docs[i]; break; }
+    }
+    if (!doc) doc = WebClient.docs[0];
+
+    document.title = doc.title + ' — 编辑器';
+    document.getElementById('title').textContent = doc.title;
+    document.getElementById('ectd-path').textContent =
+        'eCTD: ' + WebClient.ectd.getCurrentDocumentPath(doc);
+
+    // ---------- 2. 组装 DocEditor config（字段说明见 README） ----------
+    var editorConfig = {
+        // 当前用户（生产：宿主登录态里的真实用户）
+        user: { id: 'demo-user-1', name: 'Demo User' },
+        lang: 'zh-CN',
+        mode: viewMode ? 'view' : 'edit',
+        permissions: { edit: !viewMode },
+        customization: {
+            forcesave: true,
+            // eCTD 接口契约（编辑器已接线）。两种模式：
+            //   pickerUrl:            宿主 UI 模式——宿主自己的选择器页面，编辑器用
+            //                         iframe 嵌入；数据源、UI、鉴权全归宿主，结果通过
+            //                         postMessage 回传（契约见 ectd-picker.html）。
+            //   treeUrl:              内置树模式——编辑器实时 GET 拉取目录树（UI 由编辑器
+            //                         渲染；fetch 发生在 DS 域 iframe 里，必须是绝对地址
+            //                         且宿主接口开 CORS）。
+            //   currentDocumentPath:  当前文档在 eCTD 结构中的路径（宿主打开编辑器时
+            //                         自然知道它是谁，直接内联传入；host UI 模式下传给
+            //                         picker 用于算相对链接）。
+            //   resolveUrl:           外链悬浮提示解析接口——PDF 里 /GoToR、/Launch 的
+            //                         /F 存的是 eCTD 叶子 ID 时，编辑器悬停时 GET
+            //                         `${resolveUrl}&leafId=<ID>` 换出发布相对路径；
+            //                         未归一化的选择器路径用 `&target=<原值>`；
+            //                         不配则提示里显示原始 /F（详见 README 第五节）。
+            //   openUrl:              宿主阅读器地址——eCTD 会话里点击 /GoToR、/Launch
+            //                         时打开 `${openUrl}?leaf=<叶子ID>`，不再 window.open
+            //                         原始 /F；不配则保持原有安全提示 + 打开原值。
+            // 两种模式都没配 → 不显示「选择文件」按钮（只能手工输入链接）。
+            // 详见 README 第五节。
+            ectd: cfg.ectd.enabled ? {
+                pickerUrl:           cfg.ectd.pickerUrl ? new URL(cfg.ectd.pickerUrl, location.origin).href : '',
+                pickerWidth:         cfg.ectd.pickerWidth,
+                pickerHeight:        cfg.ectd.pickerHeight,
+                treeUrl:             cfg.ectd.treeUrl ? new URL(cfg.ectd.treeUrl, location.origin).href : '',
+                resolveUrl:          cfg.ectd.resolveUrl ? new URL(cfg.ectd.resolveUrl, location.origin).href : '',
+                openUrl:             cfg.ectd.openUrl ? new URL(cfg.ectd.openUrl, location.origin).href : '',
+                currentDocumentPath: doc.ectdPath
+            } : {}
+        }
+    };
+    // ---------- 版本历史（宿主契约，四事件） ----------
+    // 编辑器只在宿主 attach 了 onRequestHistory 时显示 File → Version History
+    // （api.js: canUseHistory = events && !!events.onRequestHistory）。
+    // demo 的存储/接口由 serve.js 提供：/api/history/list、/api/history/file、
+    // /api/history/restore（生产由宿主后端按同样契约实现，见 README）。
+    var historyObject = null;
+    function xhrJson(method, url, body, cb) {
+        var xhr = new XMLHttpRequest();
+        xhr.open(method, url);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.onload = function () {
+            var d = {};
+            try { d = JSON.parse(xhr.responseText); } catch (e) {}
+            cb(xhr.status, d);
+        };
+        xhr.onerror = function () { cb(0, {}); };
+        xhr.send(body ? JSON.stringify(body) : null);
+    }
+    function loadHistory(cb) {
+        xhrJson('GET', '/api/history/list?file=' + encodeURIComponent(doc.file || ''), null,
+            function (status, data) {
+                if (status === 200 && data.history) { historyObject = data; if (cb) cb(data); }
+            });
+    }
+    // 注意：events 是 DocEditor 配置的【顶层字段】（config.events），不是 editorConfig 的子字段。
+    var events = {
+        onRequestHistory: function () {
+            loadHistory(function (data) {
+                docEditor.refreshHistory({ currentVersion: data.countVersion, history: data.history });
+            });
+        },
+        onRequestHistoryData: function (event) {
+            var version = event.data;
+            if (historyObject && historyObject.historyData[version - 1])
+                docEditor.setHistoryData(historyObject.historyData[version - 1]);
+        },
+        onRequestHistoryClose: function () { document.location.reload(); },
+        onRequestRestore: function (event) {
+            xhrJson('PUT', '/api/history/restore?file=' + encodeURIComponent(doc.file || ''),
+                { fileName: doc.file, version: event.data.version, url: event.data.url },
+                function (status, data) {
+                    if (status === 200 && data.success) {
+                        loadHistory(function (d) {
+                            docEditor.refreshHistory({ currentVersion: d.countVersion, history: d.history });
+                        });
+                    } else {
+                        alert('恢复版本失败: ' + (data.error || status));
+                    }
+                });
+        }
+    };
+
+    // 保存回调（必配；DS 对没有回调的文档会直接拒绝保存，见 README 第三节）。
+    // demo 把目标文件名编进回调地址，本地 serve.js 收到后写回 docs/<file>；
+    // 生产环境不需要该参数——宿主后端用自己的 key→文档映射落库。
+    if (cfg.callbackUrl) {
+        editorConfig.callbackUrl = cfg.callbackUrl +
+            (cfg.callbackUrl.indexOf('?') >= 0 ? '&' : '?') +
+            'file=' + encodeURIComponent(doc.file || '');
+    }
+
+    var config = {
+        documentType: doc.documentType,          // 'pdf' | 'word' | 'cell' | 'slide'
+        document: {
+            title:    doc.title,
+            url:      doc.url,                   // ★ DS 服务器拉取文档的地址
+            fileType: doc.fileType,
+            // key 标识"文档版本"：同 key = 同一协同会话。demo 每次打开都用新 key
+            // （避免与 example 等其他会话撞车）；生产应使用宿主维护的版本指纹。
+            key: doc.id + '-' + Date.now()
+        },
+        editorConfig: editorConfig,
+        events: events,
+        width:  '100%',
+        height: '100%'
+    };
+
+    // ---------- 3. （可选）JWT ----------
+    function start() {
+        var s = document.createElement('script');
+        s.src = cfg.dsBaseUrl + cfg.apiPath;
+        s.onload = function () {
+            document.getElementById('status').textContent = '';
+            docEditor = new DocsAPI.DocEditor('placeholder', config);
+        };
+        s.onerror = function () {
+            document.getElementById('status').textContent =
+                '加载 api.js 失败，请检查配置里的 DocumentServer 地址：' + cfg.dsBaseUrl + cfg.apiPath;
+        };
+        document.head.appendChild(s);
+    }
+
+    if (cfg.jwtSecret) {
+        // ⚠ 仅本地联调：生产必须由宿主后端签发（见 jwt-dev.js 头部说明）
+        WebClient.jwt.sign(config, cfg.jwtSecret).then(function (token) {
+            config.token = token;
+            start();
+        }).catch(function (e) {
+            document.getElementById('status').textContent = 'JWT 签发失败（可留空 secret 跳过）: ' + e;
+            start();
+        });
+    } else {
+        start();
+    }
+})();
+</script>
+</body>
+</html>

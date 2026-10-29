@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WebClient Demo — 宿主应用（文档列表）</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+           background: #f5f6f8; color: #333; }
+    header { background: #2b3a4a; color: #fff; padding: 14px 24px; display: flex;
+             align-items: baseline; gap: 14px; }
+    header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+    header .hint { font-size: 12px; color: #9fb2c6; }
+    main { max-width: 1080px; margin: 20px auto; padding: 0 16px; display: grid;
+           grid-template-columns: 2fr 1fr; gap: 16px; align-items: start; }
+    .panel { background: #fff; border: 1px solid #e2e6ec; border-radius: 8px; padding: 16px; }
+    .panel h2 { font-size: 14px; margin: 0 0 12px; color: #2b3a4a; }
+    table.docs { width: 100%; border-collapse: collapse; }
+    table.docs th, table.docs td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #eef1f5;
+                                   vertical-align: top; }
+    table.docs th { font-size: 12px; color: #8494a6; font-weight: 600; }
+    table.docs td.path { font-size: 12px; color: #6b7a8c; }
+    button { background: #3a7bd5; border: 0; color: #fff; padding: 7px 14px; border-radius: 5px;
+             cursor: pointer; font-size: 13px; }
+    button:hover { background: #336dc2; }
+    button.ghost { background: #eef1f5; color: #3a7bd5; }
+    .field { margin-bottom: 10px; }
+    .field label { display: block; font-size: 12px; color: #6b7a8c; margin-bottom: 4px; }
+    .field input { width: 100%; padding: 6px 8px; border: 1px solid #d4dae2; border-radius: 5px; font-size: 13px; }
+    .field .tip { font-size: 11px; color: #98a6b6; margin-top: 2px; }
+    pre#ectd-out { background: #1e2733; color: #cfe3ff; font-size: 12px; padding: 12px;
+                   border-radius: 6px; overflow: auto; max-height: 300px; margin: 10px 0 0; }
+    .ok { color: #1a9e5c; } .warn { color: #c98a12; }
+</style>
+</head>
+<body>
+
+<header>
+    <h1>WebClient Demo · 宿主应用</h1>
+    <span class="hint">演示「宿主应用 → 嵌入 Online Office 编辑器」的最小集成（纯前端）</span>
+</header>
+
+<main>
+    <div>
+        <div class="panel" style="margin-bottom:16px;">
+            <h2>文档列表（来自宿主侧的 WebClient.docs）</h2>
+            <table class="docs">
+                <thead>
+                <tr><th style="width:34%">文档</th><th style="width:42%">eCTD 路径</th><th></th></tr>
+                </thead>
+                <tbody id="doc-list"></tbody>
+            </table>
+        </div>
+
+        <div class="panel">
+            <h2>eCTD 宿主接口自测（WebClient.ectd）</h2>
+            <p style="font-size:12px;color:#6b7a8c;margin-top:0;">
+                编辑器内的「eCTD 文件选择器」已直接消费 <code>treeUrl</code> 接口（数据在
+                <code>ectd-tree.json</code>，由 serve.js 提供）。本面板演示同一契约在
+                宿主页面侧的等价调用（形状不变）。
+            </p>
+            <button id="btn-ectd-test">运行自测</button>
+            <pre id="ectd-out">点击「运行自测」查看 fetchTree / getCurrentDocumentPath / getRelativePath 的输出…</pre>
+        </div>
+    </div>
+
+    <div class="panel">
+        <h2>连接配置</h2>
+        <div class="field">
+            <label>DocumentServer 地址</label>
+            <input id="cfg-ds" placeholder="http://localhost">
+            <div class="tip">浏览器访问 DS 的 nginx 入口</div>
+        </div>
+        <div class="field">
+            <label>JWT secret（仅本地联调，可留空）</label>
+            <input id="cfg-jwt" placeholder="留空 = 不携带 token；生产由宿主后端签发">
+            <div class="tip">DS 当前 JWT 为关闭状态，留空即可运行</div>
+        </div>
+        <div class="field">
+            <label>保存回调地址（宿主后端）</label>
+            <input id="cfg-cb" placeholder="留空 = DS 会拒绝保存">
+            <div class="tip">本地 demo 默认指向 serve.js 的 /callback（落盘 docs/）；
+                ⚠ 留空不是"不回调"，而是保存功能被 DS 直接拒绝，协议见 README</div>
+        </div>
+        <button id="btn-save-cfg">保存配置</button>
+        <span id="cfg-saved" class="ok" style="font-size:12px;margin-left:8px;display:none;">已保存</span>
+    </div>
+</main>
+
+<script src="js/config.js"></script>
+<script src="js/docs.js"></script>
+<script src="js/ectd-service.js"></script>
+<script>
+(function () {
+    'use strict';
+    var cfg = WebClient.config;
+
+    // ---------- 配置面板 ----------
+    document.getElementById('cfg-ds').value  = cfg.dsBaseUrl;
+    document.getElementById('cfg-jwt').value = cfg.jwtSecret;
+    document.getElementById('cfg-cb').value  = cfg.callbackUrl;
+
+    document.getElementById('btn-save-cfg').addEventListener('click', function () {
+        WebClient.saveConfig({
+            dsBaseUrl:   document.getElementById('cfg-ds').value.trim().replace(/\/+$/, '') || 'http://localhost',
+            jwtSecret:   document.getElementById('cfg-jwt').value.trim(),
+            callbackUrl: document.getElementById('cfg-cb').value.trim()
+        });
+        var s = document.getElementById('cfg-saved');
+        s.style.display = 'inline';
+        setTimeout(function () { s.style.display = 'none'; }, 1500);
+    });
+
+    // ---------- 文档列表 ----------
+    var tbody = document.getElementById('doc-list');
+    WebClient.docs.forEach(function (doc) {
+        var tr = document.createElement('tr');
+        var td1 = document.createElement('td');
+        td1.innerHTML = '<strong></strong><div style="font-size:12px;color:#98a6b6;">' +
+                        doc.documentType + ' · ' + doc.fileType + '</div>';
+        td1.querySelector('strong').textContent = doc.title;
+
+        var td2 = document.createElement('td');
+        td2.className = 'path';
+        td2.textContent = doc.ectdPath || '—';
+
+        var td3 = document.createElement('td');
+        var btn = document.createElement('button');
+        btn.textContent = '打开编辑器';
+        btn.addEventListener('click', function () {
+            window.open('editor.html?file=' + encodeURIComponent(doc.id), '_blank');
+        });
+        td3.appendChild(btn);
+
+        tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3);
+        tbody.appendChild(tr);
+    });
+
+    // ---------- eCTD 接口自测 ----------
+    document.getElementById('btn-ectd-test').addEventListener('click', function () {
+        var out = document.getElementById('ectd-out');
+        out.textContent = '调用中…';
+
+        var doc = WebClient.docs[0];
+        WebClient.ectd.fetchTree().then(function (tree) {
+            var lines = [];
+            lines.push('// 等价 REST: GET ' + cfg.ectd.treeUrl);
+            lines.push('fetchTree() -> ' + tree.length + ' 个顶层节点，前两个：');
+            lines.push(JSON.stringify(tree.slice(0, 2), null, 2));
+            lines.push('');
+            lines.push('// 当前文档路径：宿主打开编辑器时经 customization.ectd.currentDocumentPath 内联传入');
+            lines.push('getCurrentDocumentPath(doc) -> ' + WebClient.ectd.getCurrentDocumentPath(doc));
+            lines.push('');
+            lines.push('// 纯函数：当前文档 → 目标文件的相对路径');
+            var target = 'm3 质量/3.2.P-制剂/3.2.P.7-包装材料.pdf';
+            lines.push('getRelativePath(current, "' + target + '")');
+            lines.push('  -> ' + WebClient.ectd.getRelativePath(WebClient.ectd.getCurrentDocumentPath(doc), target));
+            out.textContent = lines.join('\n');
+        }).catch(function (e) {
+            out.textContent = '调用失败: ' + e;
+        });
+    });
+})();
+</script>
+</body>
+</html>

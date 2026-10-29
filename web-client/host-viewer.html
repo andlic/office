@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>宿主 PDF 阅读器（demo 占位页）</title>
+    <style>
+        body { margin: 40px; font: 14px/1.7 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; color: #222; }
+        code { background: #f2f4f7; padding: 2px 6px; border-radius: 3px; }
+        .muted { color: #667; }
+    </style>
+</head>
+<body>
+<h1>宿主 PDF 阅读器（demo 占位页）</h1>
+<p>编辑器点击 eCTD 外链后跳转到本页，并把目标叶子 ID 放在查询参数里：</p>
+<p><code id="leaf">（缺少 leaf 参数）</code></p>
+<p class="muted">
+    本地 demo 只展示 leaf；生产环境把 <code>customization.ectd.openUrl</code>
+    指向宿主自己的阅读器（如 pdf.js viewer），由阅读器按 leaf 打开发布文件。
+</p>
+<script>
+    var leaf = new URLSearchParams(location.search).get('leaf') || '';
+    document.getElementById('leaf').textContent = leaf || '（缺少 leaf 参数）';
+</script>
+</body>
+</html>
