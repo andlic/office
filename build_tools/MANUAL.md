@@ -200,6 +200,42 @@ sudo docker logs -f onlyoffice-documentserver
 sudo docker exec onlyoffice-documentserver cat /var/log/onlyoffice/documentserver/converter/out.log
 ```
 
+## P. PDF 线性化（Fast Web View）
+
+eCTD 等法规提交要求 PDF 支持 Fast Web View（线性化）。转换器在**每个普通 PDF 产物入库前**自动执行：
+
+```bash
+qpdf --linearize <file> <tmp> && mv <tmp> <file>
+```
+
+实现位置：`server/FileConverter/sources/converter.js` 的 `postProcess()`，触发条件：
+
+- 转换任务结果是"要上传"（`exitCodesUpload`）
+- 输出格式是普通 PDF（`AVS_OFFICESTUDIO_FILE_CROSSPLATFORM_PDF`）
+- 输出文件真实存在
+
+行为约定：
+
+- **失败不影响转换**：qpdf 报错时保留 x2t 原始输出，只记一条 warning
+- **PDF/A 不处理**：归档格式有自己的结构约束，不在此钩子范围内
+- **在云签名之前执行**：qpdf 重写整个文件，放在签名之后会废掉签名
+- 镜像已装 qpdf（`Dockerfile.custom` 第 0a 步）
+
+验证（镜像里没有 pdfinfo，用自带的 qpdf）：
+
+```bash
+docker exec onlyoffice-documentserver qpdf --check-linearization /path/to/file.pdf
+# 退出码 0 = 已线性化；未线性化时会打印 "not linearized" 并非 0 退出
+```
+
+宿主机若装了 poppler-utils，也可以用 `pdfinfo file.pdf | grep Optimized`（期望 `Optimized: yes`）。
+
+覆盖范围与边界：
+
+- **覆盖**：编辑器保存（回调 status 2/6 下载到的文件）、下载为 PDF、ConvertService 转换
+- **不覆盖**：未修改直接关闭的原始 PDF（走 `notModified`，不触发转换）、宿主改写/签名后的文件、绕过 DS 的 PDF
+  → 这类文件如果也要求 FWV，需要在宿主最终落盘前再做一次（先检查，未线性化才重写）
+
 ## F. 清理
 ```bash
 rm -rf ../core/build/              # 清 core 产物（下次全量重编）

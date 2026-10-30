@@ -164,6 +164,8 @@ const cfgExternalRequestAction = config.get('externalRequest.action');
 const MAX_OPEN_FILES = 200;
 const TEMP_PREFIX = 'ASC_CONVERT';
 let queue = null;
+// Set after the first ENOENT so a deployment without qpdf logs once, not per task.
+let isQpdfMissing = false;
 const clientStatsD = statsDClient.getClient();
 const exitCodesReturn = [
   constants.CONVERT_PARAMS,
@@ -1023,6 +1025,53 @@ function writeProcessOutputToLog(ctx, childRes, isDebug) {
     }
   }
 }
+/**
+ * Linearize a PDF so readers can start rendering before the whole file has
+ * downloaded (Fast Web View). Some eCTD/regulatory submissions require it.
+ *
+ * qpdf rewrites the entire file, so this must run after x2t has finished and
+ * before any signing step. Failures are non-fatal: the original file is kept.
+ *
+ * @param {Object} ctx - operation context (logger)
+ * @param {string} filePath - path to the converted PDF
+ * @returns {Promise<void>}
+ */
+async function linearizePdfForFastWebView(ctx, filePath) {
+  if (isQpdfMissing) {
+    return;
+  }
+  const tmpPath = `${filePath}.linearized.pdf`;
+  try {
+    try {
+      await spawnAsync('qpdf', ['--linearize', filePath, tmpPath], {timeout: 120000});
+    } catch (err) {
+      // qpdf exit code 3 means "finished with warnings"; the output may still
+      // be a valid linearized file, so inspect it instead of discarding it.
+      if (3 !== err.status) {
+        throw err;
+      }
+    }
+    const stat = await fs.promises.stat(tmpPath);
+    if (0 === stat.size) {
+      throw new Error('qpdf produced an empty file');
+    }
+    await fs.promises.rename(tmpPath, filePath);
+    ctx.logger.debug('qpdf linearize complete (size=%d)', stat.size);
+  } catch (err) {
+    if ('ENOENT' === err.code) {
+      isQpdfMissing = true;
+      ctx.logger.warn('qpdf not found: PDF Fast Web View is disabled');
+    } else {
+      ctx.logger.warn('qpdf linearize failed, keeping original PDF: %s', err.message);
+    }
+    try {
+      await fs.promises.unlink(tmpPath);
+    } catch (_err) {
+      // nothing to clean up
+    }
+  }
+}
+
 function* postProcess(ctx, cmd, dataConvert, tempDirs, childRes, error, isTimeout) {
   let exitCode = 0;
   let exitSignal = null;
@@ -1079,6 +1128,14 @@ function* postProcess(ctx, cmd, dataConvert, tempDirs, childRes, error, isTimeou
     // }
   }
   if (-1 !== exitCodesUpload.indexOf(error)) {
+    // Fast Web View. Runs before cloud signing on purpose: qpdf rewrites the
+    // whole file and would invalidate a signature applied earlier. PDF/A is
+    // intentionally excluded - it is an archival target with its own
+    // structural constraints, and this hook only covers ordinary PDF output.
+    if (existFile && dataConvert.fileTo &&
+        constants.AVS_OFFICESTUDIO_FILE_CROSSPLATFORM_PDF === cmd.getOutputFormat()) {
+      yield linearizePdfForFastWebView(ctx, dataConvert.fileTo);
+    }
     if (-1 !== exitCodesCopyOrigin.indexOf(error)) {
       const originPath = path.join(path.dirname(dataConvert.fileTo), 'origin' + path.extname(dataConvert.fileFrom));
       if (!fs.existsSync(dataConvert.fileTo)) {

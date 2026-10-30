@@ -21,6 +21,14 @@ ENV JWT_ENABLED=false
 # 把 ds-example.conf 的 autostart 改成 true，否则 example 服务永远 STOPPED）
 ENV EXAMPLE_ENABLED=true
 
+# 0a. qpdf：转换产物线性化（Fast Web View，eCTD 提交要求）
+#     只处理普通 PDF 输出，失败不影响转换本身（见 converter.js
+#     linearizePdfForFastWebView）。安装在 node 之前，这一层很少变。
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends qpdf; \
+    rm -rf /var/lib/apt/lists/*
+
 # 0. 装 Node.js（官方镜像没有 node，因为 converter/docservice 用的是 pkg 自包含二进制）
 #    我们的版本是用 node 跑 sources/*.js，所以需要 node。
 RUN set -eux; \
